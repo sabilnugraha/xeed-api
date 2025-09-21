@@ -15,6 +15,7 @@ type userService struct {
 	clock  contract.Clock
 	idgen  contract.IDGen
 	hasher contract.PasswordHasher
+	signer contract.TokenSigner // ← baru (untuk JWT)
 }
 
 var _ contract.UserService = (*userService)(nil)
@@ -24,6 +25,7 @@ func NewUserService(
 	clk contract.Clock,
 	idg contract.IDGen,
 	hasher contract.PasswordHasher,
+	signer contract.TokenSigner, // ← baru
 ) contract.UserService {
 	if repo == nil {
 		panic("NewUserService: repo is nil")
@@ -37,7 +39,10 @@ func NewUserService(
 	if hasher == nil {
 		panic("NewUserService: hasher is nil")
 	}
-	return &userService{repo: repo, clock: clk, idgen: idg, hasher: hasher}
+	if signer == nil {
+		panic("NewUserService: signer is nil")
+	}
+	return &userService{repo: repo, clock: clk, idgen: idg, hasher: hasher, signer: signer}
 }
 
 func (s *userService) RegisterUser(ctx context.Context, in dto.RegisterUserRequest) (*domain.User, error) {
@@ -91,4 +96,56 @@ func def(s, fallback string) string {
 		return fallback
 	}
 	return s
+}
+
+var ErrInvalidCredential = errors.New("invalid email or password")
+
+func (s *userService) Login(ctx context.Context, in dto.LoginRequest) (*dto.LoginResponse, error) {
+	if s.signer == nil {
+		return nil, errors.New("internal: token signer not configured")
+	}
+
+	email := strings.ToLower(strings.TrimSpace(in.Email))
+	if email == "" || !strings.Contains(email, "@") {
+		return nil, ErrInvalidCredential
+	}
+	if len(in.Password) == 0 {
+		return nil, ErrInvalidCredential
+	}
+
+	u, err := s.repo.GetByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil || u.PasswordHash == nil {
+		return nil, ErrInvalidCredential
+	}
+
+	// verify password (bcrypt)
+	if !s.hasher.Verify(in.Password, *u.PasswordHash) {
+		return nil, ErrInvalidCredential
+	}
+
+	// optional: cek status BLOCKED, dsb
+	// if u.Status == domain.UserBlocked { return nil, errors.New("user blocked") }
+
+	now := s.clock.Now()
+	tok, err := s.signer.Sign(u.UserID, u.Email, now)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := dto.LoginResponse{
+		AccessToken: tok,
+		User: dto.UserResponse{
+			UserID:      u.UserID,
+			Email:       u.Email,
+			DisplayName: u.DisplayName,
+			PhoneE164:   u.PhoneE164,
+			Locale:      u.Locale,
+			Timezone:    u.Timezone,
+			Status:      string(u.Status),
+		},
+	}
+	return &resp, nil
 }

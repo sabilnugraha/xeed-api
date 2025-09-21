@@ -19,6 +19,7 @@ type UserRepository interface {
 // Service interface untuk layer bisnis
 type UserService interface {
 	RegisterUser(ctx context.Context, in dto.RegisterUserRequest) (*domain.User, error)
+	Login(ctx context.Context, in dto.LoginRequest) (*dto.LoginResponse, error)
 }
 
 // Adapter utilitas (Clock, UUID, PasswordHasher)
@@ -26,4 +27,9 @@ type Clock interface{ Now() time.Time }
 type IDGen interface{ New() uuid.UUID }
 type PasswordHasher interface {
 	Hash(plain string) (hash string, alg domain.PasswordAlg, updatedAt time.Time, err error)
+	Verify(plain, hash string) bool
+}
+
+type TokenSigner interface {
+	Sign(userID uuid.UUID, email string, now time.Time) (string, error)
 }

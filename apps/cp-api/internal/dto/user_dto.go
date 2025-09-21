@@ -17,9 +17,21 @@ type RegisterUserRequest struct {
 }
 
 type UserResponse struct {
-	UserID   string `json:"userId"`
+	UserID      uuid.UUID `json:"userId"`
+	DisplayName *string   `json:"displayName,omitempty"`
+	PhoneE164   *string   `json:"phoneE164,omitempty"`
+	Email       string    `json:"email"`
+	Status      string    `json:"status"`
+	Locale      string    `json:"locale"`
+	Timezone    string    `json:"timezone"`
+}
+
+type LoginRequest struct {
 	Email    string `json:"email"`
-	Status   string `json:"status"`
-	Locale   string `json:"locale"`
-	Timezone string `json:"timezone"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	AccessToken string       `json:"accessToken"`
+	User        UserResponse `json:"user"`
 }

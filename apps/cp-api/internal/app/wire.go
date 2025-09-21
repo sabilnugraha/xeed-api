@@ -36,9 +36,10 @@ func buildHTTP(ctx context.Context, cfg config.Config) (http.Handler, func(), er
 	clock := system.Clock{}
 	idgen := system.IDGen{}
 	hasher := security.BcryptHasher{}
+	signer := security.NewJWTSigner(cfg.JWTSecret, cfg.JWTTTL)
 
 	// usecases
-	userSvc := usecase.NewUserService(userRepo, clock, idgen, hasher)
+	userSvc := usecase.NewUserService(userRepo, clock, idgen, hasher, signer)
 
 	// handlers
 	userH := handlers.NewUserHandler(userSvc)

@@ -10,19 +10,17 @@ import (
 
 func InitRouter(userHandler *handlers.UserHandler) *chi.Mux {
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
-	// Health check
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
 
-	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
-		// Users
 		r.Post("/users/register", userHandler.Register)
-		// bisa tambah route lain: login, list, dll
+		r.Post("/auth/login", userHandler.Login)
 	})
 
 	return r

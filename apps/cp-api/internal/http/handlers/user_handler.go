@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"xeed/apps/cp-api/internal/dto"
+	"xeed/apps/cp-api/internal/usecase"
 	"xeed/apps/cp-api/internal/usecase/contract"
 
 	"github.com/google/uuid"
@@ -37,7 +39,7 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := dto.UserResponse{
-		UserID:   user.UserID.String(),
+		UserID:   user.UserID,
 		Email:    user.Email,
 		Status:   string(user.Status),
 		Locale:   user.Locale,
@@ -45,5 +47,24 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
+	var req dto.LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	resp, err := h.svc.Login(r.Context(), req)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, usecase.ErrInvalidCredential) {
+			status = http.StatusUnauthorized
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
 }
