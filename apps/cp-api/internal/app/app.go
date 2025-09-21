@@ -1,113 +1,54 @@
+// apps/cp-api/internal/app/app.go
 package app
 
 import (
 	"context"
-	"errors"
+	"log"
 	"net/http"
-	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/joho/godotenv"
-
-	"xeed/apps/cp-api/internal/domain"
-	"xeed/apps/cp-api/internal/http/handlers"
-	"xeed/apps/cp-api/internal/repo/pg"
-	"xeed/apps/cp-api/internal/routers"
-	"xeed/apps/cp-api/internal/usecase"
+	"xeed/apps/cp-api/internal/config"
 )
 
-type sysClock struct{}
-
-func (sysClock) Now() time.Time { return time.Now().UTC() }
-
-type sysIDGen struct{}
-
-func (sysIDGen) New() uuid.UUID { return uuid.New() }
-
-// NOTE: hanya untuk test. Ganti dengan bcrypt di produksi.
-type fakeHasher struct{}
-
-func (fakeHasher) Hash(plain string) (string, domain.PasswordAlg, time.Time, error) {
-	return plain, domain.PasswordAlg("plain"), time.Now().UTC(), nil
-}
-
 func Run() error {
-	// ENV
-	_ = godotenv.Load(".env")
+	// 1) Load config
+	cfg := config.FromEnv()
 
-	port := getenv("PORT", "8080")
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		return errors.New("DATABASE_URL is required")
-	}
+	// 2) Context untuk graceful shutdown (Ctrl+C / SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// DB pool
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	// 3) Build seluruh dependency & handler (di wire.go)
+	handler, cleanup, err := buildHTTP(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	if err := pool.Ping(ctx); err != nil {
-		return err
-	}
-	defer pool.Close()
+	defer cleanup()
 
-	// ===== Wiring (DI) =====
-	userRepo := pg.NewUserRepositoryPG(pool)
-	// isi adapter nyata sesuai kontrakmu (clock, idgen, hasher) di service.NewUserService
-	// >>> JANGAN pakai 'var clock contract.Clock' lalu 'clock :=' di bawah
-	clock := sysClock{} // <- perhatikan: TIDAK ada deklarasi 'var clock ...' di atas
-	idgen := sysIDGen{}
-	hasher := fakeHasher{}
-	userSvc := usecase.NewUserService(
-		userRepo,
-		clock,  // contract.Clock
-		idgen,  // contract.IDGen
-		hasher, // contract.PasswordHasher
-	)
-	userHandler := handlers.NewUserHandler(userSvc)
-
-	// ===== Router =====
-	r := routers.InitRouter(userHandler)
-
-	// ===== HTTP Server =====
+	// 4) Start HTTP server
 	srv := &http.Server{
-		Addr:         ":" + port,
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  90 * time.Second,
+		Addr:              cfg.Addr, // ex: ":8080"
+		Handler:           handler,  // dari routers
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// Start
+	log.Printf("[cp-api] listening on %s", cfg.Addr)
+
+	// 5) Graceful shutdown
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.ListenAndServe()
+		<-ctx.Done()
+		log.Println("[cp-api] shutting down...")
+		shCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		errCh <- srv.Shutdown(shCtx)
 	}()
 
-	// Graceful shutdown
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
-	select {
-	case <-quit:
-		ctxShutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(ctxShutdown)
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-		return nil
+	// 6) Serve (blocking)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
 	}
-}
-
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
+	return <-errCh
 }
